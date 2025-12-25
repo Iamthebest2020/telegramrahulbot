@@ -1,8 +1,13 @@
 {
-  "name": "telegram-bot",
+  "name": "rahul-trader-vip-bot",
   "version": "1.0.0",
+  "description": "Telegram VIP bot for Rahul Trader",
   "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "node-telegram-bot-api": "^0.61.0"
   }
 }
+
