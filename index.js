@@ -1,208 +1,206 @@
 const TelegramBot = require("node-telegram-bot-api");
 const fs = require("fs");
 
-// ================= ENV =================
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_USERNAME = "Rahul_Joker198"; // NO @
+const ADMIN = "@Rahul_Joker198";
 
-// ================= BOT INIT =================
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// ================= STORAGE =================
 const DATA_FILE = "./data.json";
 
-function loadData() {
+/* ================= STORAGE ================= */
+function load() {
   if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: {}, config: {} }, null, 2));
+    fs.writeFileSync(
+      DATA_FILE,
+      JSON.stringify({
+        users: {},
+        config: {
+          depositLink: "https://www.0diuwin.com/#/register?invitationCode=174348720984",
+          welcomeImage: null,
+          welcomeMessages: [
+            "👋 Welcome to Rahul Trader VIP",
+            "📘 Educational purpose only",
+            "💳 Register under official link",
+            "👇 Click below to continue"
+          ]
+        }
+      }, null, 2)
+    );
   }
   return JSON.parse(fs.readFileSync(DATA_FILE));
 }
 
-function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+function save(d) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2));
 }
 
-let db = loadData();
+/* ================= SINGLE WELCOME FUNCTION ================= */
+async function sendWelcome(userId) {
+  const db = load();
 
-// ================= DEFAULT CONFIG =================
-db.config.depositLink ||= "https://www.0diuwin.com/#/register?invitationCode=174348720984";
-db.config.welcomeImage ||= null;
-db.config.welcomeMessages ||= [
-  "👋 Welcome to VIP Community",
-  "📘 Educational purpose only",
-  "💳 Access after verification",
-  "👇 Complete registration below"
-];
-
-saveData(db);
-
-// ================= ADMIN STATE =================
-let adminState = null; // null | broadcast | edit_welcome | set_link | set_image
-
-// ================= JOIN REQUEST =================
-bot.on("chat_join_request", async (req) => {
-  const uid = req.from.id;
-  const username = req.from.username || "no_username";
-
-  if (!db.users[uid]) {
-    db.users[uid] = {
-      username,
-      verified: false,
-      lastReminder: 0
-    };
-    saveData(db);
-  }
-
-  for (const msg of db.config.welcomeMessages) {
-    await bot.sendMessage(uid, msg);
+  for (const line of db.config.welcomeMessages) {
+    await bot.sendMessage(userId, line);
   }
 
   if (db.config.welcomeImage) {
-    await bot.sendPhoto(uid, db.config.welcomeImage);
+    await bot.sendPhoto(userId, db.config.welcomeImage);
   }
 
-  await bot.sendMessage(uid, "👇 Continue below", {
+  await bot.sendMessage(userId, "👇 Continue below", {
     reply_markup: {
       inline_keyboard: [
-        [{ text: "💳 Complete Registration", url: db.config.depositLink }],
-        [{ text: "👤 Message Admin", url: "https://t.me/" + ADMIN_USERNAME }],
-        [{ text: "✅ Deposit Done", callback_data: `done_${uid}` }]
+        [{ text: "💳 Register / Deposit", url: db.config.depositLink }],
+        [{ text: "👤 Contact Rahul", url: "https://t.me/Rahul_Joker198" }],
+        [{ text: "✅ Deposit Done", callback_data: `deposit_done_${userId}` }]
       ]
     }
   });
-});
+}
 
-// ================= CALLBACKS =================
-bot.on("callback_query", async (q) => {
-  const data = q.data;
-  const isAdmin = q.from.username === ADMIN_USERNAME;
+/* ================= JOIN REQUEST ================= */
+bot.on("chat_join_request", async (req) => {
+  const db = load();
+  const uid = req.from.id;
 
-  // USER CLICKED DEPOSIT DONE
-  if (data.startsWith("done_")) {
-    const uid = data.split("_")[1];
-    if (!db.users[uid]) return;
-
-    await bot.sendMessage(uid, "✅ Deposit marked. Admin will verify.");
-
-    await bot.sendMessage(
-      "@" + ADMIN_USERNAME,
-      `💰 Deposit Done Clicked\nUser: @${db.users[uid].username}\nUserID: ${uid}`
-    );
-    return;
+  if (!db.users[uid]) {
+    db.users[uid] = { waitingProof: false };
+    save(db);
   }
 
-  if (!isAdmin) return;
-
-  // ADMIN PANEL BUTTONS
-  if (["broadcast", "edit_welcome", "set_link", "set_image"].includes(data)) {
-    adminState = data;
-
-    const prompts = {
-      broadcast: "📢 Send TEXT message for broadcast",
-      edit_welcome: "✏️ Send welcome messages separated by |",
-      set_link: "🔗 Send new deposit link",
-      set_image: "🖼 Send new welcome image"
-    };
-
-    await bot.sendMessage(q.from.id, prompts[data]);
-  }
+  await sendWelcome(uid);
 });
 
-// ================= ADMIN PANEL =================
+/* ================= /START ================= */
+bot.onText(/\/start/, async (msg) => {
+  const db = load();
+  const uid = msg.from.id;
+
+  if (!db.users[uid]) {
+    db.users[uid] = { waitingProof: false };
+    save(db);
+  }
+
+  await sendWelcome(uid);
+});
+
+/* ================= ANY USER MESSAGE ================= */
 bot.on("message", async (msg) => {
-  if (!msg.from || msg.from.username !== ADMIN_USERNAME) return;
+  const db = load();
+  const uid = msg.from.id;
+  const username = msg.from.username ? "@" + msg.from.username : uid;
 
-  // OPEN PANEL
-  if (msg.text === "/panel") {
-    adminState = null;
-    return bot.sendMessage(msg.chat.id, "🛠 ADMIN PANEL", {
+  /* Admin Panel */
+  if (username === ADMIN && msg.text === "/panel") {
+    return bot.sendMessage(uid, "🛠 ADMIN PANEL", {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "📢 Broadcast Unverified", callback_data: "broadcast" }],
-          [{ text: "✏️ Edit Welcome Messages", callback_data: "edit_welcome" }],
-          [{ text: "🖼 Change Welcome Image", callback_data: "set_image" }],
-          [{ text: "🔗 Change Deposit Link", callback_data: "set_link" }]
+          [{ text: "✏️ Edit Welcome Text", callback_data: "edit_text" }],
+          [{ text: "🖼 Change Welcome Image", callback_data: "edit_image" }],
+          [{ text: "🔗 Change Deposit Link", callback_data: "edit_link" }]
         ]
       }
     });
   }
 
-  // NO STATE → IGNORE
-  if (!adminState) return;
-
-  // HANDLE STATES
-  if (adminState === "broadcast") {
-    if (!msg.text) {
-      adminState = null;
-      return bot.sendMessage(msg.chat.id, "❌ Broadcast cancelled (TEXT only).");
-    }
-
-    for (const uid in db.users) {
-      if (!db.users[uid].verified) {
-        bot.sendMessage(uid, msg.text, {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "💳 Complete Registration", url: db.config.depositLink }],
-              [{ text: "👤 Message Admin", url: "https://t.me/" + ADMIN_USERNAME }]
-            ]
-          }
-        });
-      }
-    }
-
-    adminState = null;
-    return bot.sendMessage(msg.chat.id, "✅ Broadcast sent.");
+  /* User sent proof */
+  if (db.users[uid]?.waitingProof && username !== ADMIN) {
+    await bot.sendMessage(ADMIN, `📥 PROOF FROM ${username}\n🆔 ${uid}`);
+    if (msg.text) await bot.sendMessage(ADMIN, msg.text);
+    if (msg.photo)
+      await bot.sendPhoto(ADMIN, msg.photo[msg.photo.length - 1].file_id);
+    return;
   }
 
-  if (adminState === "edit_welcome") {
-    if (!msg.text) {
-      adminState = null;
-      return bot.sendMessage(msg.chat.id, "❌ Cancelled (TEXT only).");
-    }
-
-    db.config.welcomeMessages = msg.text.split("|");
-    saveData(db);
-    adminState = null;
-    return bot.sendMessage(msg.chat.id, "✅ Welcome messages updated.");
-  }
-
-  if (adminState === "set_link") {
-    if (!msg.text) {
-      adminState = null;
-      return bot.sendMessage(msg.chat.id, "❌ Cancelled (TEXT only).");
-    }
-
-    db.config.depositLink = msg.text;
-    saveData(db);
-    adminState = null;
-    return bot.sendMessage(msg.chat.id, "✅ Deposit link updated.");
-  }
-
-  if (adminState === "set_image") {
-    if (!msg.photo) {
-      adminState = null;
-      return bot.sendMessage(msg.chat.id, "❌ Cancelled (send IMAGE only).");
-    }
-
-    db.config.welcomeImage = msg.photo[msg.photo.length - 1].file_id;
-    saveData(db);
-    adminState = null;
-    return bot.sendMessage(msg.chat.id, "✅ Welcome image updated.");
+  /* Any random user message → resend welcome */
+  if (username !== ADMIN) {
+    await sendWelcome(uid);
   }
 });
 
-// ================= SAFE REMINDERS (30–60 MIN) =================
-setInterval(() => {
-  const now = Date.now();
-  for (const uid in db.users) {
-    const u = db.users[uid];
-    if (!u.verified && now - u.lastReminder > 30 * 60 * 1000) {
-      bot.sendMessage(uid, "⏳ Reminder: Complete registration to proceed.");
-      u.lastReminder = now;
-    }
-  }
-  saveData(db);
-}, 5 * 60 * 1000);
+/* ================= CALLBACKS ================= */
+let adminState = null;
 
-console.log("✅ Bot running safely");
+bot.on("callback_query", async (q) => {
+  const db = load();
+  const uid = q.from.id;
+  const username = q.from.username ? "@" + q.from.username : "";
+
+  /* Deposit Done */
+  if (q.data.startsWith("deposit_done_")) {
+    const userId = q.data.split("_")[2];
+    db.users[userId].waitingProof = true;
+    save(db);
+
+    await bot.sendMessage(userId,
+      "📸 Send your Diuwin UID & deposit screenshot now."
+    );
+
+    await bot.sendMessage(ADMIN,
+      `💰 Deposit Done Clicked\nUser ID: ${userId}`
+    );
+    return;
+  }
+
+  if (username !== ADMIN) return;
+
+  /* Edit Welcome Text */
+  if (q.data === "edit_text") {
+    adminState = "text";
+    return bot.sendMessage(uid,
+      `📌 CURRENT WELCOME:\n\n${db.config.welcomeMessages.join("\n")}\n\n✏️ Send new text using |`
+    );
+  }
+
+  /* Edit Image */
+  if (q.data === "edit_image") {
+    adminState = "image";
+    if (db.config.welcomeImage) {
+      return bot.sendPhoto(uid, db.config.welcomeImage, {
+        caption: "📌 Current image\nSend new image"
+      });
+    }
+    return bot.sendMessage(uid, "No image set. Send new image.");
+  }
+
+  /* Edit Link */
+  if (q.data === "edit_link") {
+    adminState = "link";
+    return bot.sendMessage(uid,
+      `📌 Current Link:\n${db.config.depositLink}\n\nSend new link`
+    );
+  }
+});
+
+/* ================= ADMIN INPUT ================= */
+bot.on("message", async (msg) => {
+  const db = load();
+  const username = msg.from.username ? "@" + msg.from.username : "";
+
+  if (username !== ADMIN || !adminState) return;
+
+  if (adminState === "text" && msg.text) {
+    db.config.welcomeMessages = msg.text.split("|");
+    save(db);
+    adminState = null;
+    return bot.sendMessage(msg.chat.id, "✅ Welcome text updated");
+  }
+
+  if (adminState === "link" && msg.text) {
+    db.config.depositLink = msg.text;
+    save(db);
+    adminState = null;
+    return bot.sendMessage(msg.chat.id, "✅ Deposit link updated");
+  }
+
+  if (adminState === "image" && msg.photo) {
+    db.config.welcomeImage = msg.photo[msg.photo.length - 1].file_id;
+    save(db);
+    adminState = null;
+    return bot.sendMessage(msg.chat.id, "✅ Welcome image updated");
+  }
+});
+
+console.log("✅ BOT RUNNING – FINAL STABLE VERSION");
+
 
