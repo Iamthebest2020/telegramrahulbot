@@ -27,7 +27,31 @@ if (!BOT_TOKEN) {
 
 const ADMIN_USERNAME = "Rahul_Joker198"; // NO @
 
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// 🔥 FORCE TELEGRAM TO DROP ALL OLD CONNECTIONS
+(async () => {
+  try {
+    await TelegramBot.prototype._request("deleteWebhook", {
+      qs: { drop_pending_updates: true }
+    });
+    console.log("✅ Old Telegram connections cleared");
+  } catch (e) {
+    console.log("⚠️ deleteWebhook skipped:", e.message);
+  }
+})();
+
+// ✅ START POLLING SAFELY (ONLY ONCE)
+const bot = new TelegramBot(BOT_TOKEN, {
+  polling: {
+    interval: 300,
+    autoStart: true
+  }
+});
+
+// 🛡️ PREVENT POLLING CRASH LOOPS
+bot.on("polling_error", err => {
+  console.error("⚠️ Polling error:", err.code, err.message);
+});
+
 
 /* ================= GLOBAL GUARDS ================= */
 process.on("uncaughtException", err => {
