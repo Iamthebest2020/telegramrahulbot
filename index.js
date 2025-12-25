@@ -1,63 +1,70 @@
 const TelegramBot = require("node-telegram-bot-api");
+const fs = require("fs");
 
-// BOT TOKEN FROM RENDER ENV VARIABLE
+// ================= ENV =================
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_USERNAME = "Rahul_Joker198"; // NO @
 
-// YOUR ADMIN USERNAME (without @)
-const ADMIN_USERNAME = "Rahul_Joker198";
+// ================= BOT INIT =================
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// ====== CONFIG (EDIT FROM ADMIN PANEL LATER) ======
-let DEPOSIT_LINK = "https://www.0diuwin.com/#/register?invitationCode=174348720984";
-let WELCOME_IMAGE = null;
+// ================= STORAGE =================
+const DATA_FILE = "./data.json";
 
-let welcomeMessages = [
+function loadData() {
+  if (!fs.existsSync(DATA_FILE)) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: {}, config: {} }, null, 2));
+  }
+  return JSON.parse(fs.readFileSync(DATA_FILE));
+}
+
+function saveData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+let db = loadData();
+
+// ================= DEFAULT CONFIG =================
+db.config.depositLink ||= "https://www.0diuwin.com/#/register?invitationCode=174348720984";
+db.config.welcomeImage ||= null;
+db.config.welcomeMessages ||= [
   "👋 Welcome to VIP Community",
-  "📘 Educational access only",
-  "💳 Access provided after verification",
-  "⚠️ No guaranteed profits",
+  "📘 Educational purpose only",
+  "💳 Access after verification",
   "👇 Complete registration below"
 ];
 
-const autoMessages = [
-  "🔥 VIP Community Update\n\nNew members are joining today.\n\n👇 Complete registration to request access.",
-  "📢 Community Update\n\nVIP access approvals are in progress.\n\n👇 Complete registration to proceed.",
-  "⏰ Update\n\nAccess is provided after verification.\n\n👇 Complete registration to continue.",
-  "🔔 Reminder\n\nYour access request is pending.\n\n👇 Complete registration now."
-];
+saveData(db);
 
-// ====== BOT INIT ======
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// ================= ADMIN STATE =================
+let adminState = null; // null | broadcast | edit_welcome | set_link | set_image
 
-// ====== IN-MEMORY STORAGE ======
-let users = {};
-
-// ====== JOIN REQUEST HANDLER ======
+// ================= JOIN REQUEST =================
 bot.on("chat_join_request", async (req) => {
   const uid = req.from.id;
   const username = req.from.username || "no_username";
 
-  users[uid] = {
-    username,
-    verified: false,
-    clickedDeposit: false,
-    lastAutoMsg: Date.now()
-  };
+  if (!db.users[uid]) {
+    db.users[uid] = {
+      username,
+      verified: false,
+      lastReminder: 0
+    };
+    saveData(db);
+  }
 
-  // Send welcome messages
-  for (const msg of welcomeMessages) {
+  for (const msg of db.config.welcomeMessages) {
     await bot.sendMessage(uid, msg);
   }
 
-  // Send welcome image if set
-  if (WELCOME_IMAGE) {
-    await bot.sendPhoto(uid, WELCOME_IMAGE);
+  if (db.config.welcomeImage) {
+    await bot.sendPhoto(uid, db.config.welcomeImage);
   }
 
-  // Send buttons
   await bot.sendMessage(uid, "👇 Continue below", {
     reply_markup: {
       inline_keyboard: [
-        [{ text: "💳 Complete Registration", url: DEPOSIT_LINK }],
+        [{ text: "💳 Complete Registration", url: db.config.depositLink }],
         [{ text: "👤 Message Admin", url: "https://t.me/" + ADMIN_USERNAME }],
         [{ text: "✅ Deposit Done", callback_data: `done_${uid}` }]
       ]
@@ -65,133 +72,52 @@ bot.on("chat_join_request", async (req) => {
   });
 });
 
-// ====== CALLBACK HANDLER ======
+// ================= CALLBACKS =================
 bot.on("callback_query", async (q) => {
   const data = q.data;
+  const isAdmin = q.from.username === ADMIN_USERNAME;
 
   // USER CLICKED DEPOSIT DONE
   if (data.startsWith("done_")) {
     const uid = data.split("_")[1];
-    if (!users[uid]) return;
-
-    users[uid].clickedDeposit = true;
+    if (!db.users[uid]) return;
 
     await bot.sendMessage(uid, "✅ Deposit marked. Admin will verify.");
 
     await bot.sendMessage(
       "@" + ADMIN_USERNAME,
-      `💰 Deposit Done Clicked\nUser: @${users[uid].username}\nUserID: ${uid}`
+      `💰 Deposit Done Clicked\nUser: @${db.users[uid].username}\nUserID: ${uid}`
     );
+    return;
   }
 
-  // ADMIN ONLY ACTIONS
-  if (q.from.username !== ADMIN_USERNAME) return;
-
-  // APPROVE USER
-  if (data.startsWith("approve_")) {
-    const uid = data.split("_")[1];
-    if (!users[uid]) return;
-
-    users[uid].verified = true;
-    await bot.sendMessage(uid, "🎉 You are verified. Admin will approve channel access.");
-    await bot.answerCallbackQuery(q.id, { text: "Approved ✅" });
-  }
-
-  // REJECT USER
-  if (data.startsWith("reject_")) {
-    const uid = data.split("_")[1];
-    if (!users[uid]) return;
-
-    await bot.sendMessage(uid, "❌ Verification failed. Contact admin.");
-    delete users[uid];
-    await bot.answerCallbackQuery(q.id, { text: "Rejected ❌" });
-  }
+  if (!isAdmin) return;
 
   // ADMIN PANEL BUTTONS
-  if (data === "pending") {
-    const buttons = [];
-    for (const uid in users) {
-      if (!users[uid].verified) {
-        buttons.push([
-          { text: `@${users[uid].username}`, callback_data: `manage_${uid}` }
-        ]);
-      }
-    }
+  if (["broadcast", "edit_welcome", "set_link", "set_image"].includes(data)) {
+    adminState = data;
 
-    if (!buttons.length) {
-      return bot.sendMessage(q.from.id, "No pending users.");
-    }
+    const prompts = {
+      broadcast: "📢 Send TEXT message for broadcast",
+      edit_welcome: "✏️ Send welcome messages separated by |",
+      set_link: "🔗 Send new deposit link",
+      set_image: "🖼 Send new welcome image"
+    };
 
-    bot.sendMessage(q.from.id, "Pending Users:", {
-      reply_markup: { inline_keyboard: buttons }
-    });
-  }
-
-  if (data.startsWith("manage_")) {
-    const uid = data.split("_")[1];
-    if (!users[uid]) return;
-
-    bot.sendMessage(q.from.id, `User: @${users[uid].username}`, {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "✅ Approve", callback_data: `approve_${uid}` }],
-          [{ text: "❌ Reject", callback_data: `reject_${uid}` }]
-        ]
-      }
-    });
-  }
-
-  if (data === "broadcast") {
-    bot.sendMessage(q.from.id, "Send broadcast message (only to unverified users):");
-    bot.once("message", (m) => {
-      for (const uid in users) {
-        if (!users[uid].verified) {
-          bot.sendMessage(uid, m.text, {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "💳 Complete Registration", url: DEPOSIT_LINK }],
-                [{ text: "👤 Message Admin", url: "https://t.me/" + ADMIN_USERNAME }]
-              ]
-            }
-          });
-        }
-      }
-      bot.sendMessage(q.from.id, "✅ Broadcast sent.");
-    });
-  }
-
-  if (data === "edit_welcome") {
-    bot.sendMessage(q.from.id, "Send welcome messages separated by |");
-    bot.once("message", (m) => {
-      welcomeMessages = m.text.split("|");
-      bot.sendMessage(q.from.id, "✅ Welcome messages updated.");
-    });
-  }
-
-  if (data === "set_image") {
-    bot.sendMessage(q.from.id, "Send new welcome image");
-    bot.once("photo", (m) => {
-      WELCOME_IMAGE = m.photo[m.photo.length - 1].file_id;
-      bot.sendMessage(q.from.id, "✅ Welcome image updated.");
-    });
-  }
-
-  if (data === "set_link") {
-    bot.sendMessage(q.from.id, "Send new deposit link");
-    bot.once("message", (m) => {
-      DEPOSIT_LINK = m.text;
-      bot.sendMessage(q.from.id, "✅ Deposit link updated.");
-    });
+    await bot.sendMessage(q.from.id, prompts[data]);
   }
 });
 
-// ====== ADMIN PANEL COMMAND ======
-bot.on("message", (msg) => {
-  if (msg.from.username === ADMIN_USERNAME && msg.text === "/panel") {
-    bot.sendMessage(msg.chat.id, "🛠 ADMIN PANEL", {
+// ================= ADMIN PANEL =================
+bot.on("message", async (msg) => {
+  if (!msg.from || msg.from.username !== ADMIN_USERNAME) return;
+
+  // OPEN PANEL
+  if (msg.text === "/panel") {
+    adminState = null;
+    return bot.sendMessage(msg.chat.id, "🛠 ADMIN PANEL", {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "📋 Pending Users", callback_data: "pending" }],
           [{ text: "📢 Broadcast Unverified", callback_data: "broadcast" }],
           [{ text: "✏️ Edit Welcome Messages", callback_data: "edit_welcome" }],
           [{ text: "🖼 Change Welcome Image", callback_data: "set_image" }],
@@ -200,30 +126,83 @@ bot.on("message", (msg) => {
       }
     });
   }
-});
 
-// ====== SAFE AUTO MESSAGES (30–60 MIN RANDOM) ======
-function randomInterval() {
-  return (Math.floor(Math.random() * (60 - 30 + 1)) + 30) * 60 * 1000;
-}
+  // NO STATE → IGNORE
+  if (!adminState) return;
 
-function autoMessagesLoop() {
-  setTimeout(() => {
-    for (const uid in users) {
-      if (!users[uid].verified) {
-        const msg = autoMessages[Math.floor(Math.random() * autoMessages.length)];
-        bot.sendMessage(uid, msg, {
+  // HANDLE STATES
+  if (adminState === "broadcast") {
+    if (!msg.text) {
+      adminState = null;
+      return bot.sendMessage(msg.chat.id, "❌ Broadcast cancelled (TEXT only).");
+    }
+
+    for (const uid in db.users) {
+      if (!db.users[uid].verified) {
+        bot.sendMessage(uid, msg.text, {
           reply_markup: {
             inline_keyboard: [
-              [{ text: "💳 Complete Registration", url: DEPOSIT_LINK }],
+              [{ text: "💳 Complete Registration", url: db.config.depositLink }],
               [{ text: "👤 Message Admin", url: "https://t.me/" + ADMIN_USERNAME }]
             ]
           }
         });
       }
     }
-    autoMessagesLoop();
-  }, randomInterval());
-}
 
-autoMessagesLoop();
+    adminState = null;
+    return bot.sendMessage(msg.chat.id, "✅ Broadcast sent.");
+  }
+
+  if (adminState === "edit_welcome") {
+    if (!msg.text) {
+      adminState = null;
+      return bot.sendMessage(msg.chat.id, "❌ Cancelled (TEXT only).");
+    }
+
+    db.config.welcomeMessages = msg.text.split("|");
+    saveData(db);
+    adminState = null;
+    return bot.sendMessage(msg.chat.id, "✅ Welcome messages updated.");
+  }
+
+  if (adminState === "set_link") {
+    if (!msg.text) {
+      adminState = null;
+      return bot.sendMessage(msg.chat.id, "❌ Cancelled (TEXT only).");
+    }
+
+    db.config.depositLink = msg.text;
+    saveData(db);
+    adminState = null;
+    return bot.sendMessage(msg.chat.id, "✅ Deposit link updated.");
+  }
+
+  if (adminState === "set_image") {
+    if (!msg.photo) {
+      adminState = null;
+      return bot.sendMessage(msg.chat.id, "❌ Cancelled (send IMAGE only).");
+    }
+
+    db.config.welcomeImage = msg.photo[msg.photo.length - 1].file_id;
+    saveData(db);
+    adminState = null;
+    return bot.sendMessage(msg.chat.id, "✅ Welcome image updated.");
+  }
+});
+
+// ================= SAFE REMINDERS (30–60 MIN) =================
+setInterval(() => {
+  const now = Date.now();
+  for (const uid in db.users) {
+    const u = db.users[uid];
+    if (!u.verified && now - u.lastReminder > 30 * 60 * 1000) {
+      bot.sendMessage(uid, "⏳ Reminder: Complete registration to proceed.");
+      u.lastReminder = now;
+    }
+  }
+  saveData(db);
+}, 5 * 60 * 1000);
+
+console.log("✅ Bot running safely");
+
